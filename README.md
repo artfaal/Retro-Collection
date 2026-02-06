@@ -2,44 +2,20 @@
 
 Generate and publish a beautiful HTML page showcasing your retro gaming collection with playtime statistics.
 
-![Screenshot](screenshot.png)
+![Screenshot](.github/assets/screenshot.png)
 
 ## Features
 
 - Parses playtime data from muOS `track-game-time` module
-- Embeds box art as base64 (self-contained HTML)
+- Separate cover images with lazy loading for fast page load
+- "Now Playing" section with the most recently played game
 - Shows total playtime, launches, and average session time per game
 - Filter by system (NES, SNES, Genesis, etc.)
 - Responsive design
 - One-click publish from muOS console
+- Uses rsync for efficient uploads (only syncs changed files)
 
-## Components
-
-### `build_collection.py`
-
-Desktop script for building the collection page locally.
-
-```bash
-# Build only
-python3 build_collection.py
-
-# Build and publish
-python3 build_collection.py -p
-```
-
-Requires:
-- `Covers/` directory with box art organized by system
-- `track-game-time/playtime_data.json` with playtime data
-
-### `muos-app/`
-
-muOS application that runs directly on your handheld console.
-
-Files:
-- `mux_launch.sh` - muOS app launcher
-- `publish_collection.py` - builds HTML from console data and publishes via SCP
-
-## Installation on muOS
+## Installation
 
 1. Copy `muos-app/` contents to `/mnt/sdcard/MUOS/application/RetroCollection/`
 
@@ -56,7 +32,7 @@ Files:
    REMOTE_HOST = "your-server.com"
    REMOTE_PORT = "22"
    REMOTE_USER = "username"
-   REMOTE_PATH = "/path/to/html/index.html"
+   REMOTE_BASE = "/path/to/html"
    ```
 
 5. Launch "Publish Collection" from muOS Applications menu
