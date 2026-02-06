@@ -2,7 +2,7 @@
 
 Generate and publish a beautiful HTML page showcasing your retro gaming collection with playtime statistics.
 
-![Preview](https://retro.artfaal.ru)
+![Screenshot](screenshot.png)
 
 ## Features
 
