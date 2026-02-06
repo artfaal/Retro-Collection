@@ -7,9 +7,5 @@
 echo app >/tmp/act_go
 
 APP_DIR="/mnt/sdcard/MUOS/application/RetroCollection"
-LOG_FILE="$APP_DIR/last_run.log"
 
-cd "$APP_DIR"
-python3 publish_collection.py > "$LOG_FILE" 2>&1
-
-sleep 3
+/opt/muos/frontend/muterm -s 20 -bg 1a1a2e -fg e0e0e0 "$APP_DIR/run.sh"
