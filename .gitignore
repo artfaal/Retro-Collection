@@ -1,0 +1,18 @@
+# SSH keys
+retro_publish_key
+retro_publish_key.pub
+muos-app/retro_publish_key
+
+# Logs
+*.log
+last_run.log
+
+# Generated files
+collection.html
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
