@@ -3,7 +3,8 @@
 
 import json
 import os
-import base64
+import hashlib
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -11,12 +12,14 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent
 CATALOGUE_DIR = Path("/mnt/sdcard/MUOS/info/catalogue")
 PLAYTIME_FILE = Path("/mnt/sdcard/MUOS/info/track/playtime_data.json")
-OUTPUT_FILE = Path("/tmp/collection.html")
+OUTPUT_DIR = Path("/tmp/retro_publish")
+OUTPUT_FILE = OUTPUT_DIR / "index.html"
+COVERS_DIR = OUTPUT_DIR / "covers"
 SSH_KEY = SCRIPT_DIR / "retro_publish_key"
 REMOTE_HOST = "orion.artfaal.ru"
 REMOTE_PORT = "22124"
 REMOTE_USER = "artfaal"
-REMOTE_PATH = "/var/docker/compose/retro/html/index.html"
+REMOTE_BASE = "/var/docker/compose/retro/html"
 PUBLISH_URL = "https://retro.artfaal.ru"
 
 SYSTEM_MAP = {
@@ -75,9 +78,11 @@ def format_time_full(seconds):
     return f"{mins} min"
 
 
-def img_to_base64(path):
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode()
+def safe_filename(name):
+    """Create a safe filename from game name."""
+    h = hashlib.md5(name.encode()).hexdigest()[:8]
+    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
+    return f"{safe[:50]}_{h}.png"
 
 
 def parse_games(data):
@@ -100,9 +105,9 @@ def parse_games(data):
             existing = seen[dedup_key]
             existing["total_time"] += val["total_time"]
             existing["launches"] += val["launches"]
-            if val["start_time"] > existing["start_time"]:
-                existing["start_time"] = val["start_time"]
-                existing["last_session"] = val["last_session"]
+            if val.get("start_time", 0) > existing.get("start_time", 0):
+                existing["start_time"] = val.get("start_time", 0)
+                existing["last_session"] = val.get("last_session", 0)
             for dev, cnt in val.get("device_launches", {}).items():
                 existing["device_launches"][dev] = (
                     existing["device_launches"].get(dev, 0) + cnt
@@ -116,12 +121,13 @@ def parse_games(data):
 
         # Look for box art in catalogue
         box_path = CATALOGUE_DIR / cat_system / "box" / f"{game_name}.png"
-        box_b64 = None
+        cover_file = None
         if box_path.exists():
+            cover_file = safe_filename(val["name"])
             try:
-                box_b64 = img_to_base64(box_path)
+                shutil.copy(box_path, COVERS_DIR / cover_file)
             except Exception:
-                pass
+                cover_file = None
 
         game = {
             "name": val["name"],
@@ -134,7 +140,7 @@ def parse_games(data):
             "last_session": val.get("last_session", 0),
             "start_time": val.get("start_time", 0),
             "device_launches": val.get("device_launches", {}),
-            "box_b64": box_b64,
+            "cover_file": cover_file,
         }
         games.append(game)
         seen[dedup_key] = game
@@ -156,16 +162,42 @@ def build_html(games):
     top_system = max(systems, key=systems.get) if systems else "N/A"
     top_system_short = SYSTEM_SHORT.get(top_system, top_system)
 
+    # Find "Now Playing" - game with most recent session
+    now_playing = max(games, key=lambda g: g.get("start_time", 0)) if games else None
+
+    # Now Playing section
+    now_playing_html = ""
+    if now_playing and now_playing.get("start_time", 0) > 0:
+        g = now_playing
+        if g["cover_file"]:
+            img = f'<img src="covers/{g["cover_file"]}" alt="{g["name"]}" />'
+        else:
+            img = f'<div class="no-art"><span>{g["name"][0]}</span></div>'
+
+        time_str = format_time(g["total_time"])
+        now_playing_html = f"""
+    <div class="now-playing">
+        <div class="now-playing-label">Now Playing</div>
+        <div class="now-playing-card">
+            <div class="now-playing-art">{img}</div>
+            <div class="now-playing-info">
+                <div class="now-playing-name">{g['name']}</div>
+                <span class="system-badge" style="background:{g['system_color']}">{g['system_short']}</span>
+                <div class="now-playing-time">{time_str} played</div>
+            </div>
+        </div>
+    </div>"""
+
     cards_html = ""
     for i, g in enumerate(games):
-        if g["box_b64"]:
-            img = f'<img src="data:image/png;base64,{g["box_b64"]}" alt="{g["name"]}" />'
+        if g["cover_file"]:
+            img = f'<img src="covers/{g["cover_file"]}" alt="{g["name"]}" loading="lazy" />'
         else:
             img = f'<div class="no-art"><span>{g["name"][0]}</span></div>'
 
         devices = ""
         for dev, cnt in g["device_launches"].items():
-            dev_short = dev.replace("rg40xx-v", "RG40").replace("rg35xx-pro", "RG30")
+            dev_short = dev.replace("rg40xx-v", "RG40").replace("rg35xx-pro", "RG30").replace("rg34xx-sp", "RG34")
             devices += f'<span class="device-tag">{dev_short}: {cnt}</span>'
 
         time_str = format_time(g["total_time"])
@@ -263,6 +295,79 @@ def build_html(games):
         margin-top: 4px;
     }}
 
+    .now-playing {{
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 32px;
+    }}
+
+    .now-playing-label {{
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: #10b981;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }}
+
+    .now-playing-label::before {{
+        content: '';
+        width: 8px;
+        height: 8px;
+        background: #10b981;
+        border-radius: 50%;
+        animation: pulse 2s infinite;
+    }}
+
+    @keyframes pulse {{
+        0%, 100% {{ opacity: 1; }}
+        50% {{ opacity: 0.5; }}
+    }}
+
+    .now-playing-card {{
+        display: flex;
+        gap: 20px;
+        background: linear-gradient(135deg, #1a2e1a 0%, #162e16 100%);
+        border: 1px solid rgba(16, 185, 129, 0.2);
+        border-radius: 16px;
+        padding: 16px;
+        align-items: center;
+    }}
+
+    .now-playing-art {{
+        width: 100px;
+        height: 100px;
+        border-radius: 8px;
+        overflow: hidden;
+        flex-shrink: 0;
+        background: #12131a;
+    }}
+
+    .now-playing-art img {{
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+    }}
+
+    .now-playing-info {{
+        flex: 1;
+    }}
+
+    .now-playing-name {{
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #f1f5f9;
+        margin-bottom: 8px;
+    }}
+
+    .now-playing-time {{
+        font-size: 0.85rem;
+        color: #94a3b8;
+        margin-top: 8px;
+    }}
+
     .controls {{
         padding: 20px 32px;
         display: flex;
@@ -271,7 +376,7 @@ def build_html(games):
         justify-content: center;
         position: sticky;
         top: 0;
-        background: rgba(15, 15, 19, 0.9);
+        background: rgba(15, 15, 19, 0.95);
         backdrop-filter: blur(12px);
         z-index: 100;
         border-bottom: 1px solid rgba(255,255,255,0.04);
@@ -433,6 +538,9 @@ def build_html(games):
         .hero {{ padding: 32px 16px; }}
         .hero h1 {{ font-size: 1.6rem; }}
         .stats-row {{ gap: 24px; }}
+        .now-playing {{ padding: 24px 16px; }}
+        .now-playing-card {{ flex-direction: column; text-align: center; }}
+        .now-playing-art {{ width: 120px; height: 120px; margin: 0 auto; }}
         .grid {{ padding: 16px; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }}
         .card-name {{ font-size: 0.8rem; }}
     }}
@@ -460,7 +568,7 @@ def build_html(games):
             </div>
         </div>
     </div>
-
+    {now_playing_html}
     <div class="controls">
         {sys_buttons}
     </div>
@@ -493,26 +601,41 @@ def build_html(games):
 def publish():
     # Copy key to /tmp with proper permissions (SD card is FAT32, no chmod)
     tmp_key = Path("/tmp/retro_publish_key")
-    import shutil
     shutil.copy(SSH_KEY, tmp_key)
     os.chmod(tmp_key, 0o600)
 
-    dest = f"{REMOTE_USER}@{REMOTE_HOST}:{REMOTE_PATH}"
-    print(f"Publishing to {dest} ...")
-    result = subprocess.run(
-        ["/opt/openssh/bin/scp", "-i", str(tmp_key), "-P", REMOTE_PORT,
-         "-o", "StrictHostKeyChecking=no",
-         str(OUTPUT_FILE), dest],
-        capture_output=True, text=True,
-    )
+    print(f"Publishing to {REMOTE_HOST}...")
+
+    # Use rsync for efficient sync (only uploads changed files)
+    rsync_cmd = [
+        "rsync", "-avz", "--checksum",
+        "-e", f"/opt/openssh/bin/ssh -i {tmp_key} -p {REMOTE_PORT} -o StrictHostKeyChecking=no",
+        f"{OUTPUT_DIR}/",
+        f"{REMOTE_USER}@{REMOTE_HOST}:{REMOTE_BASE}/"
+    ]
+
+    result = subprocess.run(rsync_cmd, capture_output=True, text=True)
+
     if result.returncode != 0:
         print(f"Publish failed: {result.stderr.strip()}")
         return False
+
+    # Show rsync stats
+    for line in result.stdout.strip().split('\n'):
+        if line and not line.startswith('sending') and not line.startswith('created'):
+            print(line)
+
     print(f"Published! View at {PUBLISH_URL}")
     return True
 
 
 def main():
+    # Prepare output directory
+    if OUTPUT_DIR.exists():
+        shutil.rmtree(OUTPUT_DIR)
+    OUTPUT_DIR.mkdir(parents=True)
+    COVERS_DIR.mkdir(parents=True)
+
     print("Loading playtime data...")
     if not PLAYTIME_FILE.exists():
         print(f"Error: {PLAYTIME_FILE} not found")
@@ -530,9 +653,10 @@ def main():
     with open(OUTPUT_FILE, "w") as f:
         f.write(html)
 
-    print(f"Built collection: {len(games)} games")
-    size_mb = os.path.getsize(OUTPUT_FILE) / 1024 / 1024
-    print(f"File size: {size_mb:.1f} MB")
+    cover_count = len(list(COVERS_DIR.glob("*.png")))
+    print(f"Built: {len(games)} games, {cover_count} covers")
+    size_kb = os.path.getsize(OUTPUT_FILE) / 1024
+    print(f"HTML size: {size_kb:.0f} KB")
 
     publish()
 
